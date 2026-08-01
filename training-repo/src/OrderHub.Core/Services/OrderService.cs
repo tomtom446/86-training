@@ -38,22 +38,70 @@ public class OrderService : IOrderService
         if (customer is null)
             return ServiceResult<Order>.Fail("找不到指定的客戶");
 
-        if (lines is null || lines.Count == 0)
-            return ServiceResult<Order>.Fail("訂單至少需要一項商品");
+        var lineError = ValidateLines(lines);
+        if (lineError is not null)
+            return ServiceResult<Order>.Fail(lineError);
 
-        if (lines.Any(l => l.Quantity <= 0))
-            return ServiceResult<Order>.Fail("商品數量必須大於 0");
+        // 解析並驗證每一行的商品與庫存（收集所有錯誤，此階段不異動任何狀態）。
+        var (resolvedItems, errors) = await ResolveLinesAsync(lines);
+        if (errors.Count > 0)
+            return ServiceResult<Order>.Fail(errors);
 
-        if (lines.Select(l => l.ProductId).Distinct().Count() != lines.Count)
-            return ServiceResult<Order>.Fail("同一商品請勿重複加入，請調整數量即可");
-
-        var errors = new List<string>();
+        // 全部驗證通過後才套用：扣庫存、建立訂單明細。
         var order = new Order
         {
             CustomerId = customer.Id,
             Status = OrderStatus.Pending,
             CreatedAt = DateTime.UtcNow
         };
+
+        foreach (var (product, quantity) in resolvedItems)
+        {
+            product.StockQuantity -= quantity;
+
+            // 快照存「下單當下的原價」；會員折扣只在 CalculateTotal 算一次，
+            // 這裡不可以先把折扣乘進去，否則會重複折扣（Gold 會被折兩次）。
+            order.Items.Add(new OrderItem
+            {
+                ProductId = product.Id,
+                Quantity = quantity,
+                UnitPriceSnapshot = product.UnitPrice
+            });
+        }
+
+        await _orderRepository.AddAsync(order);
+        await _orderRepository.SaveChangesAsync();
+
+        return ServiceResult<Order>.Ok(order);
+    }
+
+    /// <summary>
+    /// 明細的輸入層級驗證（不碰資料庫）：非空、數量為正、不得重複商品。
+    /// 依原優先序回傳第一個錯誤訊息，全部通過回 null。
+    /// </summary>
+    private static string? ValidateLines(IReadOnlyList<NewOrderLine> lines)
+    {
+        if (lines is null || lines.Count == 0)
+            return "訂單至少需要一項商品";
+
+        if (lines.Any(l => l.Quantity <= 0))
+            return "商品數量必須大於 0";
+
+        if (lines.Select(l => l.ProductId).Distinct().Count() != lines.Count)
+            return "同一商品請勿重複加入，請調整數量即可";
+
+        return null;
+    }
+
+    /// <summary>
+    /// 逐行解析商品並驗證存在/停售與庫存，收集所有錯誤。
+    /// 只讀取、不異動庫存；回傳已驗證的 (商品, 數量) 清單與錯誤清單。
+    /// </summary>
+    private async Task<(List<(Product Product, int Quantity)> Items, List<string> Errors)> ResolveLinesAsync(
+        IReadOnlyList<NewOrderLine> lines)
+    {
+        var items = new List<(Product, int)>();
+        var errors = new List<string>();
 
         foreach (var line in lines)
         {
@@ -70,25 +118,10 @@ public class OrderService : IOrderService
                 continue;
             }
 
-            product.StockQuantity -= line.Quantity;
-
-            // 快照存「下單當下的原價」；會員折扣只在 CalculateTotal 算一次，
-            // 這裡不可以先把折扣乘進去，否則會重複折扣（Gold 會被折兩次）。
-            order.Items.Add(new OrderItem
-            {
-                ProductId = product.Id,
-                Quantity = line.Quantity,
-                UnitPriceSnapshot = product.UnitPrice
-            });
+            items.Add((product, line.Quantity));
         }
 
-        if (errors.Count > 0)
-            return ServiceResult<Order>.Fail(errors);
-
-        await _orderRepository.AddAsync(order);
-        await _orderRepository.SaveChangesAsync();
-
-        return ServiceResult<Order>.Ok(order);
+        return (items, errors);
     }
 
     public async Task<ServiceResult<Order>> CancelOrderAsync(int id)
