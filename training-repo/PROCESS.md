@@ -75,6 +75,23 @@ Claude Code（Opus 4.8, 1M context）。設定檔、hooks、subagents 都放在 
    - 庫存：`CancelOrder_ActiveOrder_SetsStatusCancelled` 只斷言**狀態**變成 Cancelled，**沒斷言庫存**，所以庫存沒加回也照樣綠。
    共通點：**測試覆蓋率看起來有，但斷言沒打在關鍵不變量上**。我補的三個回歸測試都是專門去斷言那個被漏掉的屬性（第一頁內容、快照＝原價且總額只折一次、取消後庫存加回）。
 
+練習 3
+
+> 註：以下 1–4 需要在瀏覽器實測，等我本機 `dotnet run` 起來後逐項勾選；目前先記錄「程式邏輯與 service 測試」層面的驗證狀態。
+
+1. （待頁面實測）不帶參數應走門檻 10、帶 `?threshold=3` 結果隨之縮小——邏輯已由 `GetLowStock_FiltersByThreshold_AndSortsByStockAscending` 覆蓋（門檻 10 → 只回庫存 2、8）。
+2. （待頁面實測）`?threshold=0`／`-1` 應顯示表單驗證錯誤而非 500——controller 走 `ModelState.AddModelError` 後 `return View`，不會拋例外，讀 code 已確認。
+3. ✅ 售出數量排除 Cancelled：`GetLowStock_SoldLast30Days_ExcludesCancelledAndOldOrders` 用一筆 Cancelled + 一筆 40 天前的訂單驗證，結果只算到 9（5+4）。
+4. ✅ 停售商品不出現：`GetLowStock_ExcludesInactiveProducts` 驗證停售的低庫存商品被排除。
+5. ✅ 分層與命名跟既有 Products 一致：我請 agent 用 code-reviewer 角度整份審過，回報 layering/ViewModel 綁定/驗證/單次 GROUP BY（無 N+1）皆符合慣例；我自己也對照 `ProductsController.Index` 與 `ProductRepository` 確認命名一致。
+6. ✅ 4 個新 service 測試，`dotnet test` 全綠（33 → 36）。
+
+練習 4
+
+1. ✅ 重構後 `dotnet test` 全綠 36，且**沒有新增或修改任何測試**——這正是「行為不變」最直接的證據。
+2. **改善了什麼**：`CreateOrderAsync` 從「邊驗證邊扣庫存」的長方法，拆成 `ValidateLines`（輸入層級）＋ `ResolveLinesAsync`（商品/庫存，收集所有錯誤）＋瘦身後的主流程「先全部驗完、再套用」。**沒有改變什麼**：錯誤訊息文字與觸發順序、逐行錯誤收集、成功/失敗與落地效果完全一致；折扣、取消、分頁邏輯未動。
+3. ✅ 我有從 code review 角度看 diff：確認唯一的行為面差異只是「失敗時不再先扣記憶體中的庫存」，而因為失敗本來就不 `SaveChanges`、重複商品也已被前置驗證擋掉，對外可觀察結果不變。
+
 ---
 
 ## 附錄：值得留下的對話片段
