@@ -1,0 +1,51 @@
+@model LowStockViewModel
+@{
+    ViewData["Title"] = "低庫存警示";
+}
+
+<h1 class="h3 mb-3">低庫存警示</h1>
+
+<form method="get" asp-action="LowStock" class="row g-2 align-items-end mb-3">
+    <div class="col-auto">
+        <label for="threshold" class="form-label">庫存門檻（低於此數字的販售中商品）</label>
+        <input type="number" id="threshold" name="threshold" value="@Model.Threshold"
+               class="form-control" style="max-width: 12rem;" />
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-primary">查詢</button>
+    </div>
+    <div asp-validation-summary="All" class="col-12 text-danger small mt-1"></div>
+</form>
+
+@if (!ViewData.ModelState.IsValid)
+{
+    <!-- 門檻無效時只顯示上方驗證訊息，不顯示清單或空狀態文字 -->
+}
+else if (Model.Products.Count == 0)
+{
+    <p class="text-muted">沒有低於門檻的販售中商品。</p>
+}
+else
+{
+    <table class="table table-hover align-middle">
+        <thead>
+            <tr>
+                <th>SKU</th>
+                <th>名稱</th>
+                <th class="text-end">現有庫存</th>
+                <th class="text-end">近 30 天售出</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var product in Model.Products)
+            {
+                <tr class="@(product.IsCritical ? "table-danger" : null)">
+                    <td>@product.Sku</td>
+                    <td>@product.Name</td>
+                    <td class="text-end">@product.StockQuantity</td>
+                    <td class="text-end">@product.SoldLast30Days</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
