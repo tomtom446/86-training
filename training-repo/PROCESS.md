@@ -92,6 +92,27 @@ Claude Code（Opus 4.8, 1M context）。設定檔、hooks、subagents 都放在 
 2. **改善了什麼**：`CreateOrderAsync` 從「邊驗證邊扣庫存」的長方法，拆成 `ValidateLines`（輸入層級）＋ `ResolveLinesAsync`（商品/庫存，收集所有錯誤）＋瘦身後的主流程「先全部驗完、再套用」。**沒有改變什麼**：錯誤訊息文字與觸發順序、逐行錯誤收集、成功/失敗與落地效果完全一致；折扣、取消、分頁邏輯未動。
 3. ✅ 我有從 code review 角度看 diff：確認唯一的行為面差異只是「失敗時不再先扣記憶體中的庫存」，而因為失敗本來就不 `SaveChanges`、重複商品也已被前置驗證擋掉，對外可觀察結果不變。
 
+### 第二階段 — 自建 MCP Server（活動 2）
+
+> 註：以下需要 `npx`（MCP Inspector）、SQL Server 與把 server 接進 CLI 才能實測的項目，等我本機跑起來後再逐項勾選；目前先記錄「已建置並 build 通過」的程式面狀態與設計思考。
+
+已完成（程式與 build）：
+- 練習 1：`src/OrderHub.Mcp`（net8.0，stdio）三個唯讀工具 `get_order` / `low_stock` / `customer_orders`——工具只轉接 service/repository，金額重用 `OrderService`，entity 一律投影成匿名物件避免循環參照，log 走 stderr。`dotnet build` 綠。
+- 練習 3：`.mcp.json` 已把 orderhub 接進 Claude Code。
+- 練習 4：新增 `cancel_order`（`Destructive=true, Idempotent=false`），三個唯讀工具補 `ReadOnly=true`；規則仍在 service 層，工具只轉接。
+- 練習 5：`orderhub://discount-rules` Resource 與 `low_stock_report` Prompt，並在 Program.cs 註冊。
+
+待實測（我本機要做的）：
+- [ ] 練習 0：接 Playwright MCP，請 agent 自己建單並截圖；對比活動 1 練習 2 當時我手動重現 bug 的步驟。
+- [ ] 練習 2：`npx @modelcontextprotocol/inspector dotnet run --project src/OrderHub.Mcp` → List Tools，手動呼叫 `low_stock`(10) 對照 `/Products`，`get_order` 給不存在 Id 應回清楚訊息而非 exception。
+- [ ] 練習 3：關/開 MCP 各問一次「哪些商品庫存低於 5」，比較 agent 繞多遠。
+- [ ] 練習 4：對 agent 說「取消訂單 X」，觀察按允許前資料不被動；成功後回 `/Products` 確認庫存回補；重複取消/取消已出貨單得到清楚拒絕訊息。
+- [ ] 練習 5：`@` 選 `orderhub://discount-rules` 問 Gold 買 1000 應付多少；`/mcp__orderhub__low_stock_report` 一鍵產報告。
+
+**練習 5c 思考題 — Resource / Prompt 放在 server 的價值**：
+- **折扣規則用 Resource 給 vs 讓 agent 自己讀 `OrderService.cs`**：Resource 是一份**團隊共用、進版控、單一真相**的背景知識，agent 不必去翻程式碼推斷規則（省 context、也不會因讀錯檔而誤解）。規則改版時只改這一處；缺點是若寫死字串會和程式碼變成兩份真相，所以理想上 Resource 內容可動態組出。
+- **Prompt 範本放 server vs 每個人自己打一段話**：範本放 server 等於把「問法」也版本化、全隊一致，改一次全隊生效；不必每個人記住要先呼叫 `low_stock` 再彙整。它把「該怎麼問」的知識從個人腦袋搬進可維護的資產。
+
 ---
 
 ## 附錄：值得留下的對話片段
