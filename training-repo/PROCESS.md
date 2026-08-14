@@ -113,6 +113,35 @@ Claude Code（Opus 4.8, 1M context）。設定檔、hooks、subagents 都放在 
 - **折扣規則用 Resource 給 vs 讓 agent 自己讀 `OrderService.cs`**：Resource 是一份**團隊共用、進版控、單一真相**的背景知識，agent 不必去翻程式碼推斷規則（省 context、也不會因讀錯檔而誤解）。規則改版時只改這一處；缺點是若寫死字串會和程式碼變成兩份真相，所以理想上 Resource 內容可動態組出。
 - **Prompt 範本放 server vs 每個人自己打一段話**：範本放 server 等於把「問法」也版本化、全隊一致，改一次全隊生效；不必每個人記住要先呼叫 `low_stock` 再彙整。它把「該怎麼問」的知識從個人腦袋搬進可維護的資產。
 
+### 第三階段 — 把 AI 嵌進產品（活動 3）
+
+已完成（程式與 build/test 全綠 41）：
+- 練習 1：`POST /api/orders/search` — Gemini 把中文轉**白名單參數**，查詢仍走既有 repository/EF Core。核心安全模式：**LLM 只產參數、不產 SQL**；模型輸出經「反序列化 → DataAnnotations `AllowedValues` → `Enum.TryParse` 白名單映射」，任一步失敗回 null。服務層第二道防線：**無任何有效條件一律拒絕**。金鑰走 user-secrets，`settings.json` 加 `deny Read(**/UserSecrets/**)`。5 個 service 測試（假翻譯器，不依賴 Gemini）。
+- 練習 2：`GET /Orders/Search` 頁面，重用同一個 `IOrderSearchService`（一行未改）——分層紅利。
+
+待實測（需 Gemini API key）：
+- [ ] 「上個月金卡會員取消的訂單」查得出，且與 `/Orders` 狀態篩選肉眼比對一致
+- [ ] 「幫我把所有訂單刪掉」→ 422「無法理解的查詢」，資料毫髮無傷
+- [ ] 拔掉 key → 503 與清楚訊息，不是 500
+- [ ] 無關輸入（食譜）→ 模型回 `intent: unsupported` → 「無法理解的查詢」，不炸
+
+### 第四階段 — n8n 自動化（活動 4）
+
+已完成（程式，build 成功）：
+- 補齊：MCP server 加開 **HTTP transport**（`--http` → `http://localhost:3001`），工具/Resource/Prompt 一行未改，只換 transport。
+
+待實測（需自架 n8n + 手動搭流程）：
+- [ ] 前置：`npx n8n`；HTTP 版 MCP 用 Inspector（Streamable HTTP）驗證四工具/resource/prompt
+- [ ] 練習 1：Hello Webhook（trigger → Set → Respond）
+- [ ] 練習 2：退單巡檢日報（Schedule → HTTP Request 打 `/api/orders/search` → AI Agent 寫日報 → IF 分流：開 GitHub issue / Data Table 歸檔）
+- [ ] 練習 3：AI Agent 掛 MCP Client Tool（只勾 `get_order`）深挖明細
+
+**思考題（練習 2）——「查什麼、怎麼查」若全交給 AI 自由發揮，會失去什麼？**
+把查詢邏輯留在活動 3 的 API、只讓 AI 做摘要，保住三件事：(1) **白名單防注入**——AI 若直接產 SQL/查詢就破功；(2) **可測試性**——查詢是強型別、可單元測試，AI 自由發揮無法穩定重現；(3) **日報數字可信**——AI 只依 API 回傳的真實資料摘要，不編造。與活動 3「LLM 只產參數不產 SQL」、活動 2「金額別自己算」是同一堂課。
+
+**思考題（練習 3）——有深挖 vs 沒深挖的日報差異：**
+掛上 `get_order` 後，AI 能引用每筆退單的**真實品項與金額**，日報從「N 筆、總額 X」升級為「哪幾筆、各含什麼、為何值得注意」，可追溯到單筆訂單；代價是多次工具呼叫與延遲。只給唯讀的 `get_order`、不給 `cancel_order`，正是「無人流程絕不掛寫入工具」的授權哲學。
+
 ---
 
 ## 附錄：值得留下的對話片段
